@@ -40,7 +40,7 @@ In this report I show the approach I followed to regionalize CORDEX precipitatio
 
 ## 1. Input data
 
-Data used to regionalize consisted of daily precipitation layers from six CORDEX RCMs (two regional models (REMO and RegCM) each driven by three GCMs). For each model I first calculated [annual block maximas](scripts/01_block_max.R). Next, I split the resulting datasets temporally into warming levels, pooled the observations of the six models (by warming level; i.e. 21 years x 6 models = 126 observations per cell per warming level), and calculated their [quintiles](scripts/02_ensemble_quintiles.R). Lastly, given CORDEX data is split into regional domains, I [mosaicked](scripts/03_mosaic.R) the quintile layers into global layers. The result is shown in the next figure:
+Data used to regionalize consisted of daily precipitation layers from six CORDEX RCMs (two regional models (REMO and RegCM) each driven by three GCMs). For each model I first calculated [annual block maximas](../scripts/01_block_max.R). Next, I split the resulting datasets temporally into warming levels, pooled the observations of the six models (by warming level; i.e. 21 years x 6 models = 126 observations per cell per warming level), and calculated their [quintiles](../scripts/02_ensemble_quintiles.R). Lastly, given CORDEX data is split into regional domains, I [mosaicked](../scripts/03_mosaic.R) the quintile layers into global layers. The result is shown in the next figure:
 
 ```{r, fig.width=8.5, fig.height=7.5}
 
