@@ -1,0 +1,430 @@
+---
+title: "Regionalization tests"
+author: "Carlos Dobler -"
+date: "`r Sys.Date()`"
+output: github_document
+always_allow_html: yes
+
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = F,
+                      message = F,
+                      warning = F,
+                      out.width="90%")
+
+
+library(tidyverse)
+library(lubridate)
+library(stars)
+library(furrr)
+library(units)
+library(supercells)
+library(rgeoda)
+library(regional)
+library(tmap)
+
+options(future.fork.enable = T)
+plan(multicore)
+
+dir_tmp <- "/mnt/pers_disk"
+
+```
+
+Regional Frequency Analysis (RFA) consists of an approach that seeks to increase the accuracy with which a distribution is fit to a sample of observations. This is done by leveraging the tendency of samples from different _but proximate_ sites to behave similarly (i.e. to exhibit similar distributions). RFA thus "pools" observations from multiple, close-by sites to fit a "regional" distribution, and from it, derive site-specific statistics (e.g. 99th percentile) with more less uncertainty than when analyzing sites individually.
+
+A key step in RFA is the regionalization of sites - or in other words, to define the extent to which a group of sites can be considered similar enough to conclude that their observations belong to (almost) the same distribution. Regionalization requires a great amount of subjective judgement since there will always be multiple ways to group sites, each with their trade-offs. Subjectivity is particularly high in the context of regionalizing global gridded data (such as CORDEX climate data), where each site consists of a grid cell. This because how the boundaries and number of regions are defined can vary significantly. In other words, there are so many ways one can divide a continuous surface.
+
+In this report I show the approach I followed to regionalize CORDEX precipitation data to conduct an extreme precipitation RFA under climate change at global scale for the [Probable Futures](https://probablefutures.org/) initiative. I include some tests I performed in an attempt to minimize subjectivity and choose the combination of parameters that provide the best regionalization in terms of intra-regional homogeneity and inter-regional differentiation.   
+
+
+## 1. Input data
+
+Data used to regionalize consisted of daily precipitation layers from six CORDEX RCMs (two regional models (REMO and RegCM) each driven by three GCMs). For each model I first calculated [annual block maximas](scripts/01_block_max.R). Next, I split the resulting datasets temporally into warming levels, pooled the observations of the six models (by warming level; i.e. 21 years x 6 models = 126 observations per cell per warming level), and calculated their [quintiles](scripts/02_ensemble_quintiles.R). Lastly, given CORDEX data is split into regional domains, I [mosaicked](scripts/03_mosaic.R) the quintile layers into global layers. The result is shown in the next figure:
+
+```{r, fig.width=8.5, fig.height=7.5}
+
+
+block_max_quintiles <- 
+  str_glue("{dir_tmp}/mos_blockmax_quint.nc") %>% 
+  read_ncdf()
+
+tb <- 
+  block_max_quintiles %>% 
+  slice(wl, 1) %>%
+  as_tibble() %>% 
+  pivot_longer(bp1:bp5, names_to = "quintile") %>% 
+  mutate(quintile = str_replace(quintile, "bp", "quint_"))
+
+tb %>% 
+  ggplot(aes(lon, lat, fill = value)) +
+  geom_raster() +
+  colorspace::scale_fill_continuous_sequential("plasma",
+                                               rev = F,
+                                               trans = "sqrt",
+                                               na.value = "transparent",
+                                               name = "mm   ",
+                                               breaks = c(1, 250, 500, 1000)) +
+  facet_wrap(~quintile, ncol = 2) +
+  coord_equal(ylim = c(-60, 73)) +
+  scale_x_continuous(expand = c(0.01,0.01)) +
+  theme(axis.title = element_blank(),
+        legend.position = "bottom") +
+  guides(fill = guide_coloursteps(barwidth = 15, 
+                                    barheight = 0.5, 
+                                    ticks = F, 
+                                    show.limits = F,
+                                    even.steps = F)) +
+  labs(title = "1-day maximum precipitation quintiles",
+       subtitle = "0.5 warming level")
+
+
+```
+
+
+## 2. Preliminary (micro-) regionalization
+
+Rather than directly assigning grid cells to a given region, my approach first divides the globe into micro-regions based on 1-day maximum precipitation quintiles to make the actual regionalization more efficient, as well as to ensure that grid cells belonging to a given region are all contiguous. Micro-regions were generated using the SLIC algorithm (Simple Linear Iterative Clustering) implemented in R's {[supercells](https://github.com/Nowosad/supercells)} package. This algorithm works by randomly distributing a number of "seeds" at a specified distance from each other (the "step" parameter). Each seed then forms a region by growing iteratively, progressively including neighboring cells found to be similar enough. How uneven can regions be is controlled by the "compactness" parameter. As compactness decreases, regions will tend to be more irregular and spatially adapted.
+
+To determine the optimal configuration of "step" and "compactness" values, I ran the algorithm with 24 combinations of them and calculated the _inhomogeneity_ of the resulting regions for each combination. Inhomogeneity refers to the degree of dissimilarity _within_ regions. The goal was to find out which combination of parameters would give me the lowest levels of it (i.e. grid cells inside a region being highly similar). Tests were ran only with the 0.5 warming level.  
+
+
+```{r, eval = F}
+
+land_mask <- 
+  "/mnt/bucket_cmip5/Probable_futures/irunde_scripts/create_a_dataset/04_rcm_buffered_ocean_mask.nc" %>% 
+  read_ncdf() %>%
+  st_warp(block_max_quintiles %>% slice(wl, 1)) %>% 
+  setNames("a")
+
+# select 0.5 wl, mask land, and convert to terra object
+block_max_bl <- block_max_quintiles %>% slice(wl, 1)
+block_max_bl[is.na(land_mask)] <- NA
+block_max_bl <- block_max_bl %>% as("SpatRaster")
+
+# combination of parameters
+param_grid <- expand_grid(step_ = seq(5, 15, by = 2),
+                          compactness_ = seq(10, 70, by = 20))
+
+# list of regionalizations
+l_sp <- 
+  param_grid %>% 
+  pmap(function(step_, compactness_){
+    
+    print(str_glue("s: {step_} - c: {compactness_}"))
+    
+    supercells(block_max_bl,
+               step = step_,
+               compactness = compactness_)
+    
+  })
+
+# list of inhomogeneities
+l_inh <- 
+  l_sp %>% 
+  future_map(function(sp){
+    
+    reg_inhomogeneity(sp,
+                      block_max_bl,
+                      sample_size = 0.5)
+    
+  })
+
+
+saveRDS(l_inh, here::here("out", "l_inh.rds"))
+
+```
+
+The following figure shows the distribution of inhomogeneity values (y-axis) per combination of step (facets: 5-15) and compactness (colors: 10-70) values. 
+
+```{r, fig.width=8.5, fig.height=3}
+
+l_inh <- readRDS(here::here("out", "l_inh.rds"))
+
+param_grid <- expand_grid(step_ = seq(5, 15, by = 2),
+                          compactness_ = seq(10, 70, by = 20))
+
+filter_lims <- function(x){
+  
+  l <- boxplot.stats(x)$stats[1]
+  u <- boxplot.stats(x)$stats[5]
+  
+  x[x < l | x > u] <- NA
+  
+  return(x)
+}
+
+
+param_grid %>% 
+  mutate(inh = l_inh) %>% 
+  unnest(inh) %>%
+  
+  mutate(inh = filter_lims(inh)) %>% 
+  
+  mutate(compactness_ = factor(compactness_)) %>%
+  
+  rename_with(.cols = c(step_, compactness_), ~c("step", "compactness")) %>% 
+  
+  ggplot(aes(x = compactness, group = compactness, fill = compactness, y = inh)) +
+  geom_boxplot(outlier.shape = NA) +
+  facet_grid(~step) +
+  labs(subtitle = "step") +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom")
+
+```
+
+As expected, with lower step values, regions' inhomogeneity decreases since regions will be smaller and thus display less internal variability. Reducing the compactness parameter has the same (although less pronounced) effect since allowing regions to have more variable shape results in a better division of the space. Based on these results, I chose a step value of 5 and of compactness of 10 to run the preliminary regionalization.
+
+
+## 2. Aggregation (formal regionalization)
+
+The next step involved aggregating micro-regions into larger regions depending on the similarity of their spatially-aggregated 1-day maximum precipitation quintiles. To do so, I used a spatially constrained clustering algorithm called SKATER (Spatial C(K)luster Analysis by Tree Edge Removal) implemented in R's {[rgeoda](https://cran.r-project.org/web/packages/rgeoda/index.html)} package. Different from conventional clustering methods (hierarchical, K-means), spatially constrained approaches form aggregates only from spatially contiguous sub-units. This prevents the formation of regions that, although potentially homogeneous in terms of precipitation patterns, are spatially disconnected. To accomplish this, spatially constrained clustering incorporates neighborhood information when grouping.
+
+SKATER has one main parameter: the final number of regions to be generated (k). Therefore, similar to the previous step, I ran the algorithm five times with varying values of k. For each run, I estimated the regions' inhomogenity again, as well as an additional metric called "isolation". Isolation measures the dissimilarity between a given region and its neighbors. While the ideal is to minimize inhomogeneity, for the case of isolation is the opposite as we prefer regions that stand out from their surroundings (i.e. that are actually distinct).
+
+
+```{r, eval = F}
+
+# separate pseudo-continents
+# run clustering on each individually
+# SKATER cannot run on non-contiguous polygons (or with holes)
+
+pcontinents <- 
+  c(land_mask,
+    block_max_quintiles %>% slice(wl, 1)) %>% 
+  mutate(a = ifelse(is.na(bp1), NA, a)) %>% 
+  select(a) %>% 
+  st_as_sf(as_points = F, merge = T) %>% 
+  
+  mutate(id = row_number(),
+         area = st_area(.),
+         area = area %>% set_units(NULL) %>% {./1e9})
+  
+# islands: exclude (regions on their own)
+pcontinents_small <- 
+  pcontinents %>% 
+  filter(area < 700) %>% 
+  select(geometry)
+  
+# continents/large islands
+pcontinents_large <- 
+  pcontinents %>% 
+  filter(area > 700)
+  
+block_max_bl <- block_max_quintiles %>% slice(wl, 1)
+  
+# these parameters are used to scale the number of
+# regions (k) depending on the size of the continent 
+param_grid <- seq(200, 500, length = 5) %>% round()
+
+
+l_sk <- 
+  
+  # loop through continents (only large)
+  map(seq_len(nrow(pcontinents_large)), function(i){
+    
+    print(str_glue("pseudo-continent {i} / {nrow(pcontinents_large)}"))
+    
+    pol <- pcontinents_large[i, ]
+    
+    # remove holes
+    conv_hull <-
+      pol %>% 
+      st_boundary() %>% 
+      st_polygonize() %>% 
+      st_rasterize(block_max_quintiles %>% 
+                     slice(wl, 1) %>% 
+                     select(bp1) %>% 
+                     mutate(bp1 = NA))
+    
+    b <- block_max_bl
+    b[is.na(conv_hull)] <- NA
+    b <- b %>% as("SpatRaster")
+    
+    sp <- 
+      supercells(b,
+                 step = 5,
+                 compactness = 10)
+    
+    w <- queen_weights(sp)
+    
+    d <- sp[4:8] # only quintile columns
+    
+    # loop through scale factors
+    future_map(param_grid, function(k_fact){
+      
+      print(str_glue("   scale factor: {k_fact}"))
+      
+      k <- round(pol$area/k_fact)
+      
+      if(k < 2){
+        
+        d_f <- 
+          d %>% 
+          summarize() %>% 
+          select(geometry)
+        
+      } else {
+        
+        invisible(capture.output(sp_agg <- skater(k, w, d, cpu_threads = 1)))
+        
+        d <- 
+          d %>% 
+          mutate(cluster = sp_agg$Clusters)
+        
+        d_f <- 
+          d %>% 
+          group_by(cluster) %>% 
+          summarize() %>% 
+          select(geometry)
+        
+      }
+      
+      return(d_f)
+      
+    })
+    
+  })
+
+
+l_sk <- 
+  l_sk %>% 
+  transpose %>% 
+  map(function(m){
+    
+    m %>% 
+      bind_rows() %>%
+      bind_rows(pcontinents_small) %>% 
+      mutate(id = row_number())
+    
+  })
+
+
+# clean up
+l_sk <- 
+  l_sk %>% 
+  map(function(m){
+    
+    m %>% 
+      st_rasterize(block_max_quintiles %>% 
+                     slice(wl, 1) %>% 
+                     mutate(a = NA) %>% 
+                     select(a)) %>% 
+      st_as_sf(as_points = F, merge = T)
+    
+  })
+
+
+# assessment
+
+block_max_bl <- block_max_quintiles %>% slice(wl, 1)
+block_max_bl <- block_max_bl %>% as("SpatRaster")
+
+l_inh_iso <- 
+  l_sk %>% 
+  future_map(function(m){
+    
+    inh <- 
+      reg_inhomogeneity(m,
+                        block_max_bl,
+                        sample_size = 0.5)
+    
+    iso <- 
+      reg_isolation(m,
+                    block_max_bl,
+                    sample_size = 0.25)
+    
+    list(inh = inh, iso = iso)
+    
+  })
+
+saveRDS(l_inh_iso, here::here("out", "l_inh_iso.rds"))
+
+
+```
+
+The following figure shows the distribution of inhomogeneity (left) and isolation values (right) as k values change (x-axis).
+
+```{r, fig.width=4.7, fig.height=2.5, out.width="50%"}
+
+l_inh_iso <- readRDS(here::here("out", "l_inh_iso.rds"))
+
+l_inh_iso %>% 
+  transpose() %>%
+  imap_dfr(function(mm, stat){
+    
+    mm %>% 
+      map_dfr(function(m){
+        
+        tibble(value = m,
+               n_reg = length(m),
+               stat = stat)
+        
+      }) 
+  }) %>%
+  
+  group_by(stat) %>% 
+  mutate(value = filter_lims(value)) %>% 
+  ungroup() %>% 
+  
+  mutate(n_reg = round(n_reg, -1),
+         n_reg = factor(n_reg)) %>% 
+  
+  ggplot(aes(x = n_reg, group = n_reg, fill = stat, y = value)) +
+  geom_boxplot(outlier.shape = NA, na.rm = T) +
+  guides(fill = "none") +
+  facet_wrap(~stat, ncol = 2, scales = "free_y") +
+  labs(x = "k") +
+  theme(axis.title.y = element_blank())
+
+
+```
+
+Boxplots indicate that as k increases, inhomogeneity decreases (as expected: more regions means they have to be smaller and thus with less internal variability). Similarly, as k increases, isolation also increases (also expected: more regions means similar sub-units were aggregated at a lower rate). Based on this trade-off, I chose a final k value of 530 as it provides a balance between internal variability and broader distinction.
+
+The final regionalization looks like this:
+
+```{r}
+
+sk <- 
+  readRDS(here::here("out", "l_sk.rds")) %>% 
+  pluck(3)
+
+tmap_mode("view")
+
+tm_shape(sk) +
+  tm_borders(col = "red") +
+  tm_fill(col = "red",
+          alpha = 0.15) +
+  tm_basemap(leaflet::providers$Stamen.Terrain) +
+  tm_view(set.view = 3)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
