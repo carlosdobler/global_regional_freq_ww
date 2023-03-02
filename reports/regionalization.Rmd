@@ -2,8 +2,7 @@
 title: "Regionalization tests"
 author: "Carlos Dobler -"
 date: "`r Sys.Date()`"
-output: github_document
-always_allow_html: yes
+output: html_document
 
 ---
 
