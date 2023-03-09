@@ -1,1 +1,3 @@
 - Click [here](http://raw.githack.com/carlosdobler/global_regional_freq_ww/main/reports/regionalization.html) to see the **Regionalization tests** report.
+- Click [here](http://raw.githack.com/carlosdobler/global_regional_freq_ww/main/reports/rfa_traditional.html) to see **RFA results** (traditional approach).
+- Click [here](http://raw.githack.com/carlosdobler/global_regional_freq_ww/main/reports/rfa_sliding_window.html) to see **RFA results using a sliding window** approach.
