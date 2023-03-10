@@ -1,0 +1,122 @@
+---
+title: "Regional Frequency Analysis: Traditional Approach 2 (static regions)"
+author: "Carlos Dobler -"
+date: "`r Sys.Date()`"
+output: html_document
+
+---
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = F,
+                      message = F,
+                      warning = F)
+
+
+library(tidyverse)
+library(lubridate)
+library(stars)
+library(furrr)
+library(units)
+library(tmap)
+
+options(future.fork.enable = T)
+plan(multicore)
+
+dir_tmp <- "/mnt/pers_disk"
+
+```
+
+
+This report shows results of an additional RFA, but in this case the regions derived from the baseline (0.5 deg of warming) are also used for the rest of the warming levels. The logic behind this test is that, although using different regionalizations for each warming level could account for shifts in precipitation patterns, re-using the same regionalization ensures that GEV distributions are always fitted with exactly the same set of sites (grid cells). This may be specially relevant in the context of exceedance probabilities, which are calculated comparing baseline and warming level values.   
+
+
+.....  
+
+Change in precipitation (mm) of a 100 year storm under 1.0 (left) and 3.0 (right) degrees of warming:  
+
+```{r, fig.align='center'}
+
+s <-
+  "/mnt/pers_disk/lev_and_prob_mosaics/mos_99perc_a1_staticregs.nc" %>%
+  read_ncdf()
+
+land <-
+  "/mnt/bucket_mine/misc_data/ne_110m_land/ne_110m_land.shp" %>%
+  st_read(quiet = T) %>%
+  mutate(a = 1) %>%
+  select(a) %>%
+  st_rasterize(s %>% slice(wl, 1) %>% mutate(b = NA) %>% select(b))
+
+s <-
+  s %>%
+  split("wl") %>%
+  select(2,6) %>%
+  setNames(c("wl_1.0", "wl_3.0"))
+
+s[is.na(land)] <- NA
+
+s <- s %>% .[,1:1798,]
+
+tmap_mode("view")
+
+tm_shape(s) +
+  tm_raster(palette = hcl.colors(20, "Zissou 1", rev = T),
+            breaks = c(-600, -1, 11, 24, 50, 999),
+            labels = c("< -1", "-1 - 11", "12 - 24", "25 - 50", "> 50")) +
+  tm_facets(sync = T,
+            nrow = 1) +
+  tm_view(set.view = 3)
+
+
+```
+
+..... 
+
+Change in frequency (X times vs. baseline) of a 100 year storm under 1.0 (left) and 3.0 (right) degrees of warming:
+
+```{r}
+
+s <-
+  "/mnt/pers_disk/lev_and_prob_mosaics/mos_prob-b99perc_a1_staticregs.nc" %>%
+  read_ncdf()
+
+s <-
+  s %>%
+  split("wl") %>%
+  select(1,5) %>%
+  setNames(c("wl_1.0", "wl_3.0"))
+
+s[is.na(land)] <- NA
+
+s <- s %>% .[,1:1798,]
+
+tm_shape(s) +
+  tm_raster(palette = hcl.colors(20, "Zissou 1", rev = T),
+            breaks = c(-600, 1, 2, 3, 4, 999),
+            labels = c("< 1", "1 - 2", "2 - 3", "3 - 4", "> 4"),
+            mid = 1.5) +
+  tm_facets(sync = T,
+            nrow = 1) +
+  tm_view(set.view = 3)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
