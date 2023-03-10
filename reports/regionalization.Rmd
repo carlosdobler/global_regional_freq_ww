@@ -31,9 +31,9 @@ dir_tmp <- "/mnt/pers_disk"
 
 ```
 
-Regional Frequency Analysis (RFA) consists of an approach that seeks to increase the accuracy with which a distribution is fit to a sample of observations. This is done by leveraging the tendency of samples from different _but proximate_ sites to behave similarly (i.e. to exhibit similar distributions). RFA thus "pools" observations from multiple, close-by sites to fit a "regional" distribution, and from it, derive site-specific statistics (e.g. 99th percentile) with more less uncertainty than when analyzing sites individually.
+Regional Frequency Analysis (RFA) consists of an approach that seeks to increase the accuracy with which a distribution is fit to a sample of observations. This is done by leveraging the tendency of samples from different _but proximate_ sites to behave similarly (i.e. to exhibit similar distributions). RFA thus "pools" observations from multiple, close-by sites to fit a "regional" distribution, and from it, derive site-specific statistics (e.g. 99th percentile) with less uncertainty than when analyzing sites individually.
 
-A key step in RFA is the regionalization of sites - or in other words, to define the extent to which a group of sites can be considered similar enough to conclude that their observations belong to (almost) the same distribution. Regionalization requires a great amount of subjective judgement since there will always be multiple ways to group sites, each with their trade-offs. Subjectivity is particularly high in the context of regionalizing global gridded data (such as CORDEX climate data), where each site consists of a grid cell. This because how the boundaries and number of regions are defined can vary significantly. In other words, there are so many ways one can divide a continuous surface.
+A key step in RFA is the regionalization of sites - or in other words, to define the extent to which a group of sites can be considered similar enough to conclude that their observations belong to (almost) the same distribution. Regionalization requires a great amount of subjective judgement since there will always be multiple ways to group sites, each with their trade-offs. Subjectivity is particularly high in the context of regionalizing global gridded data (such as CORDEX climate data), where each site consists of a grid cell. This because how the boundaries and number of regions are defined can vary significantly. Simply put, there are so many ways one can divide a continuous surface.
 
 In this report I show the approach I followed to regionalize CORDEX precipitation data to conduct an extreme precipitation RFA under climate change at global scale for the [Probable Futures](https://probablefutures.org/) initiative. I include some tests I performed in an attempt to minimize subjectivity and choose the combination of parameters that provide the best regionalization in terms of intra-regional homogeneity and inter-regional differentiation.   
 
@@ -84,7 +84,7 @@ tb %>%
 
 ## 2. Preliminary (micro-) regionalization
 
-Rather than directly assigning grid cells to a given region, my approach first divides the globe into micro-regions based on 1-day maximum precipitation quintiles to make the actual regionalization more efficient, as well as to ensure that grid cells belonging to a given region are all contiguous. Micro-regions were generated using the SLIC algorithm (Simple Linear Iterative Clustering) implemented in R's {[supercells](https://github.com/Nowosad/supercells)} package. This algorithm works by randomly distributing a number of "seeds" at a specified distance from each other (the "step" parameter). Each seed then forms a region by growing iteratively, progressively including neighboring cells found to be similar enough. How uneven can regions be is controlled by the "compactness" parameter. As compactness decreases, regions will tend to be more irregular and spatially adapted.
+Rather than directly assigning grid cells to a given region, my approach first divides the globe into micro-regions based on 1-day maximum precipitation quintiles to make the actual regionalization more efficient, as well as to ensure that grid cells belonging to a given region are all contiguous. Micro-regions were generated using the SLIC algorithm (Simple Linear Iterative Clustering) implemented in R's {[supercells](https://github.com/Nowosad/supercells)} package. This algorithm works by distributing a number of "seeds" at a regular distance from each other (the "step" parameter). Each seed then forms a region by growing iteratively, progressively including neighboring cells found to be similar enough. How uneven can regions be is controlled by the "compactness" parameter. As compactness decreases, regions will tend to be more irregular and spatially adapted.
 
 To determine the optimal configuration of "step" and "compactness" values, I ran the algorithm with 24 combinations of them and calculated the _inhomogeneity_ of the resulting regions for each combination. Inhomogeneity refers to the degree of dissimilarity _within_ regions. The goal was to find out which combination of parameters would give me the lowest levels of it (i.e. grid cells inside a region being highly similar). Tests were ran only with the 0.5 warming level.  
 
@@ -181,9 +181,9 @@ As expected, with lower step values, regions' inhomogeneity decreases since regi
 
 ## 2. Aggregation (formal regionalization)
 
-The next step involved aggregating micro-regions into larger regions depending on the similarity of their spatially-aggregated 1-day maximum precipitation quintiles. To do so, I used a spatially constrained clustering algorithm called SKATER (Spatial C(K)luster Analysis by Tree Edge Removal) implemented in R's {[rgeoda](https://cran.r-project.org/web/packages/rgeoda/index.html)} package. Different from conventional clustering methods (hierarchical, K-means), spatially constrained approaches form aggregates only from spatially contiguous sub-units. This prevents the formation of regions that, although potentially homogeneous in terms of precipitation patterns, are spatially disconnected. To accomplish this, spatially constrained clustering incorporates neighborhood information when grouping.
+The next step involved aggregating micro-regions into larger regions depending on the similarity of their spatially-aggregated 1-day maximum precipitation quintiles. To do so, I used a spatially constrained clustering algorithm called SKATER (Spatial C(K)luster Analysis by Tree Edge Removal) implemented in R's {[rgeoda](https://cran.r-project.org/web/packages/rgeoda/index.html)} package. Different from conventional clustering methods (hierarchical, K-means), spatially constrained approaches form aggregates only from spatially contiguous sub-units. This prevents the formation of regions that, although potentially homogeneous in terms of precipitation patterns, could be spatially disconnected. To accomplish this, spatially constrained clustering incorporates neighborhood information when grouping.
 
-SKATER has one main parameter: the final number of regions to be generated (k). Therefore, similar to the previous step, I ran the algorithm five times with varying values of k. For each run, I estimated the regions' inhomogenity again, as well as an additional metric called "isolation". Isolation measures the dissimilarity between a given region and its neighbors. While the ideal is to minimize inhomogeneity, for the case of isolation is the opposite as we prefer regions that stand out from their surroundings (i.e. that are actually distinct).
+SKATER has one main parameter: the final number of regions to be generated (k). Therefore, similar to the previous step, I ran the algorithm five times with varying values of k. For each run, I estimated the regions' inhomogenity again, as well as an additional metric called *isolation*. Isolation measures the dissimilarity between a given region and its neighbors. While the ideal is to minimize inhomogeneity, for the case of isolation is the opposite as we prefer regions that stand out from their surroundings (i.e. that are actually distinct).
 
 
 ```{r, eval = F}
@@ -249,7 +249,7 @@ l_sk <-
                  step = 5,
                  compactness = 10)
     
-    w <- queen_weights(sp)
+    w <- queen_weights(sp, precision_threshold = 1)
     
     d <- sp[4:8] # only quintile columns
     
@@ -269,7 +269,7 @@ l_sk <-
         
       } else {
         
-        invisible(capture.output(sp_agg <- skater(k, w, d, cpu_threads = 1)))
+        invisible(capture.output(sp_agg <- skater(k, w, d, cpu_threads = 1, random_seed = 1)))
         
         d <- 
           d %>% 
@@ -316,6 +316,8 @@ l_sk <-
       st_as_sf(as_points = F, merge = T)
     
   })
+
+saveRDS(l_sk, here::here("out", "l_sk.rds"))
 
 
 # assessment
@@ -383,9 +385,9 @@ l_inh_iso %>%
 
 ```
 
-Boxplots indicate that as k increases, inhomogeneity decreases (as expected: more regions means they have to be smaller and thus with less internal variability). Similarly, as k increases, isolation also increases (also expected: more regions means similar sub-units were aggregated at a lower rate). Based on this trade-off, I chose a final k value of 530 as it provides a balance between internal variability and broader distinction.
+Boxplots indicate that as k increases, inhomogeneity decreases (as expected: more regions means they have to be smaller and thus with less internal variability). Similarly, as k increases, isolation also increases (also expected: more regions means aggregation of similar sub-units happened less frequently). Based on this trade-off, I chose a final k value of 530 as it provides a balance between internal variability and broader distinction.
 
-The final regionalization looks like this:
+The final regionalization for the 0.5 warming level layers looks like this:
 
 ```{r}
 
