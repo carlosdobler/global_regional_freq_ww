@@ -1,0 +1,134 @@
+---
+title: "Regional Frequency Analysis: Sliding Window Approach"
+author: "Carlos Dobler -"
+date: "`r Sys.Date()`"
+output: html_document
+
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = F,
+                      message = F,
+                      warning = F,
+                      out.width="90%")
+
+
+library(tidyverse)
+library(lubridate)
+library(stars)
+library(furrr)
+library(units)
+library(tmap)
+
+options(future.fork.enable = T)
+plan(multicore)
+
+dir_tmp <- "/mnt/pers_disk"
+
+```
+
+
+An alternative to using pre-defined regions to fit a regional GEV distribution is to use a (spatially) sliding window. This would be akin to RFA approaches based on a circular search area centered on a site of interest. Under these approaches, the neighborhood around a site is considered a "region". Because these "regions" vary only slightly between adjacent sites, distributions and derived statistics vary relatively smoothly across space. Moreover, a sliding window approach overcomes the challenge of accounting for shifts in pre-defined regions due to climate change.
+
+This report shows results of calculating the precipitation and probability change of a 100 year storm using a sliding window method. The steps I followed were:
+
+1. Calculate annual block maximas of precipitation for each model for each domain.
+2. Slice each model by warming levels.
+3. Pool (concatenate) block maximas from all models by warming level.
+4. For each warming level, fit a regional GEV using a 5x5 sliding window as region, and obtain the 99th percentile and exceedance probability of the central grid cell.
+5. Mosaic both variables from all domains for all warming levels.
+
+.....  
+
+Change in precipitation of a 100 year storm under 1.0 (left) and 3.0 (right) degrees of warming:
+
+```{r}
+
+s <-
+  "/mnt/pers_disk/lev_and_prob_mosaics/mos_99perc_a2.nc" %>%
+  read_ncdf()
+
+land <-
+  "/mnt/bucket_mine/misc_data/ne_110m_land/ne_110m_land.shp" %>%
+  st_read(quiet = T) %>%
+  mutate(a = 1) %>%
+  select(a) %>%
+  st_rasterize(s %>% slice(wl, 1) %>% mutate(b = NA) %>% select(b))
+
+s <-
+  s %>%
+  split("wl") %>%
+  select(2,6) %>%
+  setNames(c("wl_1.0", "wl_3.0"))
+
+s[is.na(land)] <- NA
+
+s <- s %>% .[,1:1798,]
+
+tmap_mode("view")
+
+tm_shape(s) +
+  tm_raster(palette = hcl.colors(20, "Zissou1", rev = T),
+            breaks = c(-600, -1, 11, 24, 50, 999),
+            labels = c("< -1", "-1 - 11", "12 - 24", "25 - 50", "> 50")) +
+  tm_facets(sync = T,
+            nrow = 1) +
+  tm_view(set.view = 3)
+
+
+```
+
+.....  
+
+Change in frequency of a 100 year storm under 1.0 (left) and 3.0 (right) degrees of warming:
+
+```{r}
+
+s <-
+  "/mnt/pers_disk/lev_and_prob_mosaics/mos_prob-b99perc_a2.nc" %>%
+  read_ncdf()
+
+s <-
+  s %>%
+  split("wl") %>%
+  select(1,5) %>%
+  setNames(c("wl_1.0", "wl_3.0"))
+
+s[is.na(land)] <- NA
+
+s <- s %>% .[,1:1798,]
+
+tm_shape(s) +
+  tm_raster(palette = hcl.colors(20, "Zissou 1", rev = T),
+            breaks = c(-600, 1, 2, 3, 4, 999),
+            labels = c("< 1", "1 - 2", "2 - 3", "3 - 4", "> 4"),
+            mid = 1.5) +
+  tm_facets(sync = T,
+            nrow = 1) +
+  tm_view(set.view = 3)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

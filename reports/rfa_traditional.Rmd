@@ -63,7 +63,7 @@ s <- s %>% .[,1:1798,]
 tmap_mode("view")
 
 tm_shape(s) +
-  tm_raster(palette = hcl.colors(20, "Zissou1", rev = T),
+  tm_raster(palette = hcl.colors(20, "Zissou 1", rev = T),
             breaks = c(-600, -1, 11, 24, 50, 999),
             labels = c("< -1", "-1 - 11", "12 - 24", "25 - 50", "> 50")) +
   tm_facets(sync = T,
@@ -94,10 +94,10 @@ s[is.na(land)] <- NA
 s <- s %>% .[,1:1798,]
 
 tm_shape(s) +
-  tm_raster(palette = hcl.colors(20, "Zissou1", rev = T),
-            breaks = c(-600, -1, 1, 2, 4, 999),
-            labels = c("< -1", "-1 - 1", "1 - 2", "2 - 4", "> 4"),
-            mid = 0) +
+  tm_raster(palette = hcl.colors(20, "Zissou 1", rev = T),
+            breaks = c(-600, 1, 2, 3, 4, 999),
+            labels = c("< 1", "1 - 2", "2 - 3", "3 - 4", "> 4"),
+            mid = 1.5) +
   tm_facets(sync = T,
             nrow = 1) +
   tm_view(set.view = 3)
