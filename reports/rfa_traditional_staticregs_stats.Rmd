@@ -1,0 +1,385 @@
+---
+title: "Regional Frequency Analysis: Sliding Window Approach"
+author: "Carlos Dobler -"
+date: "`r Sys.Date()`"
+output: github_document
+
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = F,
+                      message = F,
+                      warning = F,
+                      out.width="95%",
+                      fig.height=4.1*3,#32, 
+                      fig.width=9.7)
+
+
+library(tidyverse)
+library(lubridate)
+library(stars)
+library(furrr)
+library(units)
+library(tmap)
+library(colorspace)
+
+options(future.fork.enable = T)
+plan(multicore)
+
+dir_tmp <- "/mnt/pers_disk"
+
+```
+
+The following figure shows the distributions of regions by size. The most common size is of between ~30,000 and ~260,000 km^2. The distribution is heavily left-tailed skewed (small regions are way more common than very large ones; the skew is not immediately noticeable due to the x-axis scaling).
+
+```{r, fig.width=6.6, fig.height=4, out.width="65%"}
+
+reg <- 
+  readRDS(here::here("out", "l_sk_wl.rds")) %>% 
+  pluck(1)
+
+reg <- 
+  reg %>% 
+  mutate(area = st_area(reg),
+         area = set_units(area, km^2)) %>% 
+  drop_units()
+
+
+ggplot(reg, aes(area)) +
+  geom_histogram() +
+  scale_x_continuous(trans = "log2", 
+                     breaks = scales::trans_breaks("log2", function(x) round(2^x, -2), n = 10),
+                     labels = scales::comma) +
+  labs(x = "km^2",
+       caption = "Note: x-axis is log2-scaled")
+
+
+```
+
+---
+
+In the next figure, the top map shows the extreme precipitation deciles at 0.5 degrees of warming. Places in blue (yellow) represent where the 100-yr storm precipitation amounts are the highest (lowest) in the world under the baseline. The middle and the bottom map show deciles of positive _change_ in extreme precipitation compared to the baseline (i.e. only increases in amounts). Places in blue (yellow) represent where 100-yr storms will intensify the most (least). Places in grey correspond to places that will experience a negative change (i.e. the 100-yr storm precipitation will decrease).
+
+
+
+```{r, fig.height=4.8*3}
+
+s <- 
+  "/mnt/pers_disk/lev_and_prob_mosaics/mos_99perc_a1_staticregs.nc" %>% 
+  read_ncdf() 
+
+land <- 
+  "/mnt/bucket_mine/misc_data/ne_50m_land/ne_50m_land.shp" %>% 
+  st_read(quiet = T) %>% 
+  mutate(a = 1) %>% 
+  select(a) %>% 
+  st_rasterize(s %>% slice(wl, 1) %>% mutate(a = NA) %>% select(a))
+
+s[is.na(land)] <- NA
+
+l_p <- 
+  imap(seq(0.5, 3, by = 0.5) %>% as.character, function(wl, wl_i){
+    
+    ss <- 
+      s %>% 
+      slice(wl, wl_i) %>% 
+      setNames("v") %>% 
+      mutate(v = round(v, 1))
+    
+    d <- 
+      ss %>% 
+      pull() %>% 
+      .[. > 0] %>%
+      quantile(seq(0,1, by = 0.1), na.rm = T)
+    
+    tb_neg <- 
+      ss %>% 
+      as_tibble() %>% 
+      mutate(wl = {{wl}}) %>% 
+      filter(v < 0) %>% 
+      mutate(v = factor(-1))
+    
+    tb <-
+      ss %>% 
+      mutate(v = ifelse(v < 0, NA, v)) %>% 
+      cut(d) %>% 
+      # mutate(v = as.integer(v)) %>%
+      as_tibble() %>% 
+      mutate(wl = {{wl}}) %>% 
+      bind_rows(tb_neg)
+    
+    ggplot() +
+      geom_raster(data = tb %>% filter(v != "-1"), aes(lon, lat, fill = v)) +
+      geom_raster(data = tb %>% filter(v == "-1"), aes(lon, lat), fill = "grey70") +
+      coord_equal(ylim = c(-60, 78), xlim = c(-160, 155)) +
+      theme(axis.title = element_blank(),
+            legend.position = "bottom") +
+      
+      scale_x_continuous(expand = c(0, 0)) +
+      scale_y_continuous(expand = c(0, 0)) +
+      
+      guides(fill = guide_legend(nrow = 2, keywidth = 0.8, keyheight = 0.8, byrow = T)) +
+      
+      scale_fill_discrete_sequential("plasma",
+                                     rev = T,
+                                     na.value = "transparent",
+                                     name = str_glue("Decile   ")) +
+      labs(subtitle = str_glue("WL: {wl} degrees"))
+    
+  })
+
+
+patchwork::wrap_plots(l_p[c(1,3,6)], ncol = 1)
+
+
+
+```
+
+--- 
+
+The following figure shows positive _changes_ in the frequency of the 100-yr storm for varying degrees of warming relative to a 0.5 degree warming level. Places in blue (yellow) represent where the 100-yr storm frequency is expected to increase the most (least). Places in grey correspond to places that will experience a negative change (i.e. the 0.5 WL 100-yr storm will become less common).
+
+```{r, fig.height=4.8*3}
+
+s <- 
+  "/mnt/pers_disk/lev_and_prob_mosaics/mos_prob-b99perc_a1_staticregs.nc" %>% 
+  read_ncdf() 
+
+s[is.na(land)] <- NA
+
+l_p <- 
+  imap(seq(1, 3, by = 0.5) %>% as.character, function(wl, wl_i){
+    
+    ss <- 
+      s %>% 
+      slice(wl, wl_i) %>% 
+      setNames("v") %>% 
+      mutate(v = round(v, 2))
+    
+    d <- 
+      ss %>% 
+      pull() %>% 
+      .[. > 1] %>%
+      quantile(seq(0,1, by = 0.1), na.rm = T)
+    
+    tb_neg <- 
+      ss %>% 
+      as_tibble() %>% 
+      mutate(wl = {{wl}}) %>% 
+      filter(v <= 1) %>% 
+      mutate(v = factor(-1))
+    
+    tb <-
+      ss %>% 
+      mutate(v = ifelse(v <= 1, NA, v)) %>% 
+      cut(d) %>% 
+      # mutate(v = as.integer(v)) %>%
+      as_tibble() %>% 
+      mutate(wl = {{wl}}) %>% 
+      bind_rows(tb_neg)
+    
+    ggplot() +
+      geom_raster(data = tb %>% filter(v != "-1"), aes(lon, lat, fill = v)) +
+      geom_raster(data = tb %>% filter(v == "-1"), aes(lon, lat), fill = "grey70") +
+      coord_equal(ylim = c(-60, 78), xlim = c(-160, 155)) +
+      theme(axis.title = element_blank(),
+            legend.position = "bottom") +
+
+      scale_x_continuous(expand = c(0, 0)) +
+      scale_y_continuous(expand = c(0, 0)) +
+
+      guides(fill = guide_legend(nrow = 2, keywidth = 0.8, keyheight = 0.8, byrow = T)) +
+
+      scale_fill_discrete_sequential("plasma",
+                                     rev = T,
+                                     na.value = "transparent",
+                                     name = str_glue("Decile   ")) +
+      labs(subtitle = str_glue("WL: {wl} degrees"))
+    
+  })
+
+patchwork::wrap_plots(l_p[c(1,3,5)], ncol = 1)
+
+```
+
+---
+
+The following figure shows the differences between v1 and v2 of the 100-yr storm precipitation amounts maps. Blue (red) represent areas where the new map depicts higher (lower) amounts than the old map. The map at the top, corresponding to a warming level of 0.5 degrees, shows "raw" precipitation differences. The middle and bottom map show differences in _change_ of precipitation (i.e. differences of deltas).
+
+```{r}
+
+dir_originals <- "/mnt/pers_disk/originals"
+
+# if(!dir.exists(dir_originals)){
+#   dir.create(dir_originals)
+# }
+# 
+# "gsutil -m cp gs://wcdi_production/water_module/rcm_regcm_remo/global_RegCM_and_REMO_pr_100yrstorm.nc {dir_originals}/" %>%
+#   str_glue() %>%
+#   system()
+# 
+# "gsutil -m cp gs://wcdi_production/water_module/rcm_regcm_remo/global_RegCM_and_REMO_rp_100yrstorm.nc {dir_originals}/" %>%
+#   str_glue() %>%
+#   system()
+
+l_s <- 
+  map2(c("_pr_", "_rp_"), 
+       c("_99perc_", "_prob-b99perc_"), 
+       function(v_old, v_new){
+         
+         if(v_old == "_pr_"){
+           slices_1 = c(1,3,6)
+           slices_2 = c(1,3,6)
+           wls = seq(0.5, 3, by = 0.5)
+         } else {
+           slices_1 = c(2,4,6)
+           slices_2 = c(1,3,5)
+           wls = seq(1, 3, by = 0.5)
+         }
+         
+         s_old <- 
+           dir_originals %>%
+           list.files(full.names = T) %>% 
+           str_subset(v_old) %>%
+           read_ncdf(make_time = F) %>% 
+           select(2) %>% 
+           slice(time, slices_1)
+         
+         s_new <- 
+           "/mnt/pers_disk/lev_and_prob_mosaics" %>% 
+           list.files(full.names = T) %>% 
+           str_subset(v_new) %>%
+           str_subset("a1_staticregs") %>% 
+           read_ncdf() %>% 
+           st_set_dimensions("wl", values = wls) %>% 
+           slice(wl, slices_2) %>% 
+           setNames("v")
+         
+         s_old <- 
+           s_old %>% 
+           st_warp(s_new) %>% 
+           st_set_dimensions(3, names = "wl") %>% 
+           setNames("v") %>%
+           mutate(v = set_units(v, NULL),
+                  v = ifelse(v == -99999, NA, v))
+         
+         list(new = s_new, old = s_old)
+    
+  })
+
+
+l_s <- 
+  map(l_s, function(l){
+    
+    map(l, function(s){
+      s[is.na(land)] <- NA
+      return(s)
+    })
+    
+  })
+
+l_dif <- 
+  map(l_s, function(l){
+    
+    dif <- l[[1]] - l[[2]]
+    return(dif)
+    
+  })
+
+
+
+# Precipitation amount
+
+tb <- 
+    l_dif[[1]] %>% 
+    as_tibble()
+
+
+tb <-
+  tb %>% 
+  mutate(v = raster::clamp(v, -200, 200))
+
+tb %>% 
+  ggplot(aes(lon, lat, fill = v)) +
+  geom_raster() +
+  facet_wrap(~wl, ncol = 1) +
+  coord_equal(ylim = c(-60, 78), xlim = c(-160, 155)) +
+  theme(axis.title = element_blank(),
+        legend.position = "bottom") +
+  
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  
+  guides(fill = guide_coloursteps(barwidth = 20, 
+                                  barheight = 0.5, 
+                                  ticks = F, 
+                                  show.limits = F,
+                                  even.steps = F)) +
+  
+  colorspace::scale_fill_binned_diverging("blue-red3",
+                                          na.value = "transparent",
+                                          breaks = c(-200, -150, -90, -50, -10, 10, 50, 90, 150, 200),
+                                          rev = T,
+                                          name = "mm   ")
+
+
+
+
+```
+
+--- 
+
+The following maps show differences in the _change_ of frequency of the 100-yr storm between v1 and v2 maps (i.e. all maps show differences of deltas). Blue (red) represent areas where the new map depicts higher (lower) frequency than the old map.
+
+```{r}
+
+tb <- 
+    l_dif[[2]] %>% 
+    as_tibble()
+
+tb <-
+  tb %>%
+  mutate(v = raster::clamp(v, -4, 4))
+
+tb %>% 
+  ggplot(aes(lon, lat, fill = v)) +
+  geom_raster() +
+  facet_wrap(~wl, ncol = 1) +
+  coord_equal(ylim = c(-60, 78), xlim = c(-160, 155)) +
+  theme(axis.title = element_blank(),
+        legend.position = "bottom") +
+  
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  
+  guides(fill = guide_coloursteps(barwidth = 20, 
+                                  barheight = 0.5, 
+                                  ticks = F, 
+                                  show.limits = F,
+                                  even.steps = F)) +
+  
+  colorspace::scale_fill_binned_diverging("blue-red3",
+                                          na.value = "transparent",
+                                          breaks = c(-4, -3, -2, -1, -0.5, 0.5, 1, 2, 3, 4),
+                                          rev = T,
+                                          name = "x (times)   ")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
