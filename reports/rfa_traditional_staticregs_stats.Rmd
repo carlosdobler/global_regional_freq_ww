@@ -1,5 +1,5 @@
 ---
-title: "Regional Frequency Analysis: Sliding Window Approach"
+title: "Regional Frequency Analysis: Statistics"
 author: "Carlos Dobler -"
 date: "`r Sys.Date()`"
 output: github_document

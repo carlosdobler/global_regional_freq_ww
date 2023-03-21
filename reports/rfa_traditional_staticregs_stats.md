@@ -1,4 +1,4 @@
-Regional Frequency Analysis: Sliding Window Approach
+Regional Frequency Analysis: Statistics
 ================
 Carlos Dobler -
 2023-03-21
